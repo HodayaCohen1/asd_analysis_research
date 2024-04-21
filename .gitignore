@@ -1,0 +1,17 @@
+# python ignores
+*.pyc
+*.egg-info
+build/
+dist/
+venv*
+reports/
+
+# IDEignores
+.idea/
+*.iml
+.vscode
+
+# OSX ignores
+.DS_Store
+
+output_*
