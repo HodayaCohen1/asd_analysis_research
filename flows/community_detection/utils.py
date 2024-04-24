@@ -11,9 +11,9 @@ import community as community_louvain
 from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
+import infomap
 
-
-from ..community_detection.consts import *
+from ..community_detection.consts import DESIRED_RACE_UNIQUE, DESIRED_MARITAL_STATUS_UNIQUE, DESIRED_GENDER_UNIQUE
 from helpers.consts import *
 from helpers.exceptions import FieldMissingException, ValueMissingException
 
@@ -53,6 +53,57 @@ def make_output_dir(args):
         os.makedirs(output_dir)
     print(f'Output directory: {output_dir}')
     return output_dir
+
+def add_dempgraphic_data(df_dict: dict, args):
+    """
+    Adds demographic data to the patients dataframe
+    :param df_dict: Dictionary of datasets
+    :param args: Arguments
+    """
+    print('-' * NUM_OF_HYPHENS)
+    print(f'Adding demographic data to patients dataframe...')
+    df_patients = df_dict['patients']
+    print('df_patients shape ', df_patients.shape)
+
+    # load the full patients dataframe
+    hf_d_patients = pd.read_csv('/Users/hodaya/Projects/Python/Thesis/Data Preparation/HF_D_PATIENT.csv')
+    P_SK_gender_race_ms = df_patients[['PATIENT_SK']].merge(hf_d_patients[['PATIENT_SK', 'RACE', 'MARITAL_STATUS', 'GENDER']].drop_duplicates(), on='PATIENT_SK', how='left')
+    print('P_SK_gender_race_ms shape ', P_SK_gender_race_ms.shape)
+
+    # Initialize an empty DataFrame to store the common values
+    P_SK_common_values = pd.DataFrame()
+
+    # List of columns we're interested in
+    cols = ['RACE', 'MARITAL_STATUS', 'GENDER']
+
+    # Loop over the columns and calculate the mode
+    for col in cols:
+        P_SK_common_values[col] = P_SK_gender_race_ms.groupby('PATIENT_SK')[col].apply(lambda x: x.mode().values[0] if not x.mode().empty else np.nan)
+
+    # Reset the index
+    P_SK_common_values = P_SK_common_values.reset_index()
+    P_SK_common_values['RACE'] = P_SK_common_values['RACE'].apply(lambda a: a if a in(DESIRED_RACE_UNIQUE) else 'Unknown')
+    P_SK_common_values['MARITAL_STATUS'] = P_SK_common_values['MARITAL_STATUS'].apply(lambda a: a if a in(DESIRED_MARITAL_STATUS_UNIQUE) else 'Unknown')
+    P_SK_common_values['GENDER'] = P_SK_common_values['GENDER'].apply(lambda a: a if a in(DESIRED_GENDER_UNIQUE) else 'Unknown')
+    print('P_SK_common_values shape ', P_SK_common_values.shape)
+
+    # Merge the common values with the original DataFrame
+    df_patients = df_patients.merge(P_SK_common_values, on='PATIENT_SK', how='left')
+
+    # move the three additional columns to the first position
+    indx=1
+    cols_name = ['RACE','GENDER', 'MARITAL_STATUS']
+    for col in cols_name:
+        first_col = df_patients.pop(col)
+        df_patients.insert(indx, col, first_col)
+        indx+=1
+
+    df_dict['patients'] = df_patients
+    print(f'Finished adding demographic data to patients dataframe!')
+
+
+
+
 def handle_icd(df_dict: dict):
     """
     Updates the icd dataframe
@@ -76,39 +127,40 @@ def handle_patients(df_dict: dict, args):
     df_patients = df_dict['patients']
     df_dict['patients_full'] = df_dict['patients'].copy()
     # Removing phecodes_F columns
-    if args.population_type == 'ASD':
+    if not args.population_type == 'mixed':
         df_columns = list(df_patients.columns)[:1792]
         df_patients = df_patients[df_columns]
-        df_patients = df_patients.drop(['RACE','GENDER','MARITAL_STATUS'], axis=1)
 
-    elif args.population_type == 'Control':
-        df_columns = list(df_patients.columns)[:1789]
-        df_patients = df_patients[df_columns]
-
+    df_patients = df_patients.drop(['RACE','GENDER','MARITAL_STATUS'], axis=1)
     df_patients['PATIENT_SK'] = df_patients['PATIENT_SK'].astype(str)
     print(f'df_patients shape: {df_patients.shape}, cols: {df_patients.columns}')
+
+    # drop duplicates samples (from the control sample)
+    df_patients.drop_duplicates(inplace=True)
+
+    if args.population_type == 'mixed':
+        for code in ['264.9', '292.1', '300.1', '312.0', '313.1', '315.0', '315.1', '315.2', '348.8', '350.3', '752.0', '313.3']:
+            # drop the ASD indicator column
+            df_patients.drop(code, axis=1, inplace=True)
+            print('code ', code, ' dropped')
+        print('df after drop shape', df_patients.shape)
+
+    # drop the ASD indicator column
+    elif '313.3' in df_patients.columns:
+        df_patients.drop('313.3', axis=1, inplace=True)
+
+    # fill the NaN values with 0
+    df_patients.fillna(0, inplace=True)
+    df_patients = df_patients.reset_index(drop=True)
 
     df_dict['patients'] = df_patients
     print(f'Finished handling patients dataframe!')
 
 @measure_time
-def data_prep(df_dict: dict):
+def data_prep(df_dict: dict, args):
     print('-' * NUM_OF_HYPHENS)
     print(f'Data Preparation...')
     df1 = df_dict['patients']
-
-    print('df original shape', df1.shape)
-
-    # drop duplicates samples (from the control sample)
-    df1.drop_duplicates(inplace=True)
-
-    # drop the ASD indicator column
-    if '313.3' in df1.columns:
-        df1.drop('313.3', axis=1, inplace=True)
-
-    # fill the NaN values with 0
-    df1.fillna(0, inplace=True)
-    df1 = df1.reset_index(drop=True)
 
     # drop the patient_sk column
     df1_phecodes = df1.drop(['PATIENT_SK'], axis=1).values
@@ -245,6 +297,55 @@ def get_community_label_propagation(df_dict: dict, G, args, output_dir):
     print('get_community_label_propagation successfully finished')
     return df
 
+def get_community_infomap(df_dict: dict, G, args, output_dir):
+    print('-' * NUM_OF_HYPHENS)
+    print(f'Performing Infomap Community Detection...')
+
+    im = infomap.Infomap()
+    network = im.network
+
+    # Create a mapping from node labels to integers
+    node_mapping = {node: i for i, node in enumerate(G.nodes())}
+
+    # Assuming G is your networkx graph
+    for u, v, data in G.edges(data=True):
+        network.addLink(node_mapping[u], node_mapping[v], float(data['weight']))
+
+    im.run()
+    # Create a dictionary for communities
+    communities = {}
+    for node in im.tree:
+        if node.is_leaf:
+            if node.module_id not in communities:
+                communities[node.module_id] = []
+            communities[node.module_id].append(node.node_id)
+
+    print(f'num of communities were found: {len(communities.items())}')
+    # Print community sizes
+    community_lengths = [len(comm) for comm in communities.values()]
+    print('communities_len: ', sorted(community_lengths, reverse=True))
+
+    # Save communities to CSV
+    df = pd.DataFrame.from_dict(communities, orient='index').transpose()
+    df.to_csv(os.path.join(output_dir,f'{args.population_type}_infomap_communities_10nn.csv'), index=False)
+    df_dict['df_communities'] = df
+
+    print('get_community_infomap successfully finished')
+    return df
+
+def get_community_greedy_modularity(df_dict: dict, G, args, output_dir):
+    print('-' * NUM_OF_HYPHENS)
+    print(f'Performing Greedy Modularity Community Detection...')
+
+    communities = nx.algorithms.community.greedy_modularity_communities(G, weight='weight', resolution=10)
+    communities_len = [len(comm) for comm in communities]
+    print('num of communities: ', len(communities))
+    print('communities_len: ', communities_len)
+    df = pd.DataFrame(communities).transpose()
+    df.to_csv(os.path.join(output_dir,f'{args.population_type}_greedy_modularity_res10_communities_10nn.csv'), index=False)
+    df_dict['df_communities'] = df
+    print('get_community_greedy_modularity successfully finished')
+    return df
 
 @measure_time
 def plot_community_lengths(df_dict: dict, args, output_dir):
@@ -312,6 +413,7 @@ def add_demographic_data(df_dict: dict, args, output_dir):
 
     all_pop_patients_clusters['PATIENT_SK'] = all_pop_patients_clusters['PATIENT_SK'].astype(int)
     all_pop_patients_clusters = all_pop_patients_clusters.merge(df_patients_full, on = 'PATIENT_SK', how='left')
+    all_pop_patients_clusters.drop_duplicates(inplace=True)
     print(all_pop_patients_clusters)
     all_pop_patients_clusters.to_csv(os.path.join(output_dir, f'{args.population_type}_with_clusters_and_demographics.csv'), index=False)
     print('add_demographic_data successfully finished')

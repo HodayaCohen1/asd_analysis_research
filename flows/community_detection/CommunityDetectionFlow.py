@@ -6,8 +6,8 @@ import pandas as pd
 
 from flows.AbstractFlow import AbstractFlow
 from ..community_detection.consts import *
-from ..community_detection.utils import make_output_dir, handle_icd,handle_patients,  data_prep, get_top10_nn, create_nx_graph, get_community_louvain, \
-    plot_community_lengths, add_demographic_data, get_community_label_propagation
+from ..community_detection.utils import make_output_dir, add_dempgraphic_data,  handle_icd,handle_patients,  data_prep, get_top10_nn, create_nx_graph, get_community_louvain, \
+    plot_community_lengths, add_demographic_data, get_community_label_propagation, get_community_infomap, get_community_greedy_modularity
 
 
 class CommunityDetectionFlow(AbstractFlow, ABC):
@@ -34,6 +34,10 @@ class CommunityDetectionFlow(AbstractFlow, ABC):
         # ---------------------- Make Output Directory ----------------------
         output_dir = make_output_dir(args)
 
+        # ---------------------- Add Demographic Data ----------------------
+        if args.population_type in ('Control', 'mixed'):
+            add_dempgraphic_data(df_dict, args)
+
         # ---------------------- Handle icd dataframe ----------------------
         handle_icd(df_dict)
 
@@ -41,7 +45,7 @@ class CommunityDetectionFlow(AbstractFlow, ABC):
         handle_patients(df_dict, args)
 
         # ---------------------- Data Preparation ----------------------
-        data_prep(df_dict)
+        data_prep(df_dict, args)
 
         # ---------------------- Get top 10 nearest neighbors ----------------------
         get_top10_nn(df_dict)
@@ -54,7 +58,12 @@ class CommunityDetectionFlow(AbstractFlow, ABC):
             get_community_louvain(df_dict, G, args, output_dir)
         elif args.community_detection_type == 'label_propagation':
             get_community_label_propagation(df_dict, G, args, output_dir)
-
+        elif args.community_detection_type == 'infomap':
+            get_community_infomap(df_dict, G, args, output_dir)
+        elif args.community_detection_type == 'greedy_modularity':
+            get_community_greedy_modularity(df_dict, G, args, output_dir)
+        else:
+            raise ValueError('Invalid community detection type')
 
         # ---------------------- Plot the Communities Length ----------------------
         plot_community_lengths(df_dict, args, output_dir)
