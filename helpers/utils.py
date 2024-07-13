@@ -19,6 +19,7 @@ def parse_args():
     parser.add_argument('--icd_file', '-icd', type=str, required=True, help='input icd file')
     parser.add_argument('--population_type', '-pt', type=str, required=True, help='population type - can be ASD/ Control/mixed')
     parser.add_argument('--community_detection_type', '-ctt', type=str, required=False, help='community detection type - can be louvain/label_propagation/infomap/greedy_modularity')
+    parser.add_argument('--cv_ind', '-cv', type=bool, required=True, help='cross validation indicator')
 
     args = parser.parse_args()
     return args
@@ -33,7 +34,7 @@ def check_args(args):
     print('-' * NUM_OF_HYPHENS)
     print('Checking args...')
     if args.type is None:
-        raise ArgumentMissingException('type argument is missing')
+        raise ArgumentMissingException('flow type argument is missing')
     if args.patients_file is None:
         raise ArgumentMissingException('patients file argument is missing')
     if args.icd_file is None:
@@ -44,6 +45,8 @@ def check_args(args):
         raise ArgumentMissingException('population type argument should be ASD/ Control/mixed')
     if args.type=='community_detection' and args.community_detection_type is None:
         raise ArgumentMissingException('community detection type argument is missing')
+    if args.cv_ind is None:
+        raise ArgumentMissingException('cv indicator argument is missing')
     print('Finished checking args!')
 
 def delete_files(paths: list) -> None:

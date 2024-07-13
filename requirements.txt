@@ -15,3 +15,6 @@ community
 matplotlib
 python-louvain
 infomap
+xlsxwriter
+statsmodels
+openpyxl

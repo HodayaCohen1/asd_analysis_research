@@ -5,12 +5,10 @@ import pandas as pd
 from sklearn.model_selection import KFold
 
 from flows.AbstractFlow import AbstractFlow
-from ..community_detection.consts import *
-from ..community_detection.utils import make_output_dir, add_dempgraphic_data,  handle_icd,handle_patients,  data_prep, get_top10_nn, create_nx_graph, get_community_louvain, \
-    plot_community_lengths, add_demographic_data, get_community_label_propagation, get_community_infomap, get_community_greedy_modularity, evaluate_clusters
+from ..phewas_analysis.consts import *
+from ..phewas_analysis.utils import make_output_dir, create_icd_dict, perform_phewas_analysis
 
-
-class CommunityDetectionFlow(AbstractFlow, ABC):
+class PhewasAnalysisFlow(AbstractFlow, ABC):
     def __init__(self, type: str):
         super().__init__(type)
 
@@ -26,6 +24,7 @@ class CommunityDetectionFlow(AbstractFlow, ABC):
             df_dict = {}
             for name, file_path in input_files.items():
                 df_dict[name] = pd.read_csv(file_path)
+                df_dict[name].fillna(0, inplace=True)
                 print(f'{name} loaded successfully, shape: {df_dict[name].shape}')
         except FileNotFoundError as e:
             print('files do not exist.')
@@ -34,13 +33,18 @@ class CommunityDetectionFlow(AbstractFlow, ABC):
         # ---------------------- Make Output Directory ----------------------
         output_dir = make_output_dir(args)
 
-        # ---------------------- Add Demographic Data ----------------------
-        if args.population_type in ('Control', 'mixed'):
-            add_dempgraphic_data(df_dict, args)
+        # # ---------------------- Add Demographic Data ----------------------
+        # if args.population_type in ('Control', 'mixed'):
+        #     add_dempgraphic_data(df_dict, args)
+
 
         # ---------------------- Handle icd dataframe ----------------------
-        handle_icd(df_dict)
+        phe_codes_dict = create_icd_dict(df_dict)
+        perform_phewas_analysis(df_dict, output_dir, FREQ_FILE_NAME, output_dir, PHEWAS_FILE_NAME, FINAL_FILE_NAME, phe_codes_dict, phewas_flag=True)
 
+
+
+"""
         # ---------------------- Handle Patients Dataframe ----------------------
         handle_patients(df_dict, args)
 
@@ -100,3 +104,5 @@ class CommunityDetectionFlow(AbstractFlow, ABC):
 
             # ---------------------- Add Demographic Data ----------------------
             add_demographic_data(df_dict, args, output_dir)
+            
+"""

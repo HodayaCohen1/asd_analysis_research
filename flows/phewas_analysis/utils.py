@@ -4,15 +4,13 @@ import time
 import zipfile
 from datetime import datetime, timedelta
 from typing import Dict, List
-import torch
-import turicreate as tc
-import networkx as nx
-import community as community_louvain
 from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import infomap
 from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+import xlsxwriter
+import statsmodels.api as sm
 
 from ..community_detection.consts import DESIRED_RACE_UNIQUE, DESIRED_MARITAL_STATUS_UNIQUE, DESIRED_GENDER_UNIQUE
 from helpers.consts import *
@@ -31,25 +29,12 @@ def measure_time(func):
     return wrapper
 
 
-def get_required_columns(schema: dict) -> List[str]:
-    """
-    Iterate over the dataframe schema and extracts every required column
-    :param schema: Dictionary of the dataframe schema
-    :return: List of required column names
-    """
-    return [col for col, col_data in schema['columns'].items() if col_data['required'] == 'true']
-
-
-def is_string_column(series):
-    return all(isinstance(x, str) or pd.isna(x) for x in series)
-
 def make_output_dir(args):
     """
     Creates the output directory
     :param args: Arguments
     """
-    if args.community_detection_type:
-        output_dir = OUTPUT_DIR.format(args.type+'_'+args.community_detection_type, args.population_type)
+    output_dir = OUTPUT_DIR.format(args.type, args.population_type)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     print(f'Output directory: {output_dir}')
@@ -103,9 +88,7 @@ def add_dempgraphic_data(df_dict: dict, args):
     print(f'Finished adding demographic data to patients dataframe!')
 
 
-
-
-def handle_icd(df_dict: dict):
+def create_icd_dict(df_dict: dict):
     """
     Updates the icd dataframe
     :param df_dict: Dictionary of datasets
@@ -113,10 +96,266 @@ def handle_icd(df_dict: dict):
     print('-' * NUM_OF_HYPHENS)
     print(f'Handling icd dataframe...')
     df_icd = df_dict['icd']
-    df_icd['Phenotype'].fillna('0', inplace=True)
-    df_icd['Phenotype'] = df_icd['Phenotype'].str.lower()
-    df_dict['icd'] = df_icd
-    print(f'Finished handling icd dataframe!')
+    # df_icd['Phenotype'].fillna('0', inplace=True)
+    # df_icd['Phenotype'] = df_icd['Phenotype'].str.lower()
+    # df_dict['icd'] = df_icd
+    phenotypes_names = df_icd[['PheCode','Phenotype']].astype(str).drop_duplicates()
+    phenotypes_names = phenotypes_names.groupby('PheCode')['Phenotype'].min().reset_index()
+    phe_codes_dict = dict(zip(phenotypes_names['PheCode'], phenotypes_names['Phenotype']))
+    print(f'Finished creating icd dictionary!')
+    return phe_codes_dict
+
+def create_writer(writer_path, writer_name):
+    # Create an Excel writer object
+    writer = pd.ExcelWriter(f'{writer_path}/{writer_name}.xlsx', engine='xlsxwriter')
+    return writer
+
+def get_frequencies(df, cluster_data, cluster):
+    """
+    Calculates the frequency of each phenotype in the cluster
+    :param df:
+    :param cluster_data:
+    :param cluster:
+    :return:
+    """
+    # print('cluster', cluster)
+    phenotypes_cols_indx = list(range(4, len(df.columns)-1))
+    # print('columns to calc frequency', cluster_data.iloc[:,phenotypes_cols_indx].columns)
+
+    # Get the binary phenotypes for the current cluster
+    phenotypes = cluster_data.iloc[:,phenotypes_cols_indx]
+    # print('phenotypes cols',phenotypes.columns )
+
+    # Calculate the frequency of each phenotype in the cluster
+    phenotype_frequencies_cluster = phenotypes.mean()
+
+    # Calculate the frequency of each phenotype in the entire population
+    phenotype_frequencies_population = df.iloc[:, phenotypes_cols_indx].mean()
+
+    # Calculate the frequency of each phenotype in the entire population without the current cluster
+    phenotype_frequencies_population_without_cluster = df[df['cluster'] != cluster].iloc[:, phenotypes_cols_indx].mean()
+
+    # Calculate the Fold Change
+    fold_change = phenotype_frequencies_cluster / phenotype_frequencies_population_without_cluster
+
+    # Get the top 20 phenotypes based on frequency within the cluster
+    top_20_frequency_phenotypes_cluster = phenotype_frequencies_cluster.nlargest(20)
+
+    # Calculate TF-IDF for each phenotype
+    tf_idf = {}
+    total_clusters = df['cluster'].nunique()
+    for phenotype in phenotypes.columns:
+        # Calculate the number of clusters where the phenotype appears at least once
+        clusters_with_phenotype = (df[df[phenotype].astype(int) > 0]['cluster'].nunique())
+        # print('phenotype', phenotype)
+        # print('clusters_with_phenotype', clusters_with_phenotype)
+        # print('total_clusters', total_clusters)
+        # If the phenotype doesn't appear in any cluster, we set the IDF to 0
+        if clusters_with_phenotype == 0:
+            idf = 0
+        else:
+            idf = np.log(total_clusters / clusters_with_phenotype)
+
+        # The TF-IDF is the product of the phenotype's frequency in the cluster (TF) and IDF
+        tf_idf[phenotype] = phenotype_frequencies_cluster[phenotype] * idf
+        # print('phenotype_frequencies_cluster[phenotype]', phenotype_frequencies_cluster[phenotype])
+    return [phenotypes, phenotype_frequencies_cluster, phenotype_frequencies_population, phenotype_frequencies_population_without_cluster, fold_change, top_20_frequency_phenotypes_cluster, tf_idf]
+
+def freq_xl_append(results_df, phenotype, frequency_cluster, frequency_population, frequency_population_without_cluster, fold_change, phenotype_new, tf_idf):
+    # Create a DataFrame for the new row
+    new_row = pd.DataFrame({
+        'Phecode': [phenotype],
+        'Frequency in Cluster': [frequency_cluster],
+        'Frequency in Entire Population': [frequency_population],
+        'Frequency in Population without Cluster': [frequency_population_without_cluster],
+        'Fold Change': [fold_change],
+        'Phenotype (new)': [phenotype_new],
+        'TF-IDF': [tf_idf]
+    })
+
+    # Concatenate the new row with the existing DataFrame
+    results_df = pd.concat([results_df, new_row], ignore_index=True)
+    return results_df
+
+def extract_xl(df, writer, phe_codes_dict):
+    print('-' * NUM_OF_HYPHENS)
+    print(f'Calculating frequencies and saving to Excel...')
+    label_phenotypes_dict = {}  # create an empty dictionary to store the phenotype indexes for each label
+    for cluster in sorted(df['cluster'].unique())[:2]:
+        print(f'Cluster {cluster} started...')
+        cluster_data = df[df['cluster'] == cluster]  # Filter data for the current cluster
+
+        freq_res = get_frequencies(df, cluster_data, cluster)
+        phenotypes = freq_res[0]
+        phenotype_frequencies_cluster = freq_res[1]
+        phenotype_frequencies_population = freq_res[2]
+        phenotype_frequencies_population_without_cluster = freq_res[3]
+        phenotype_fold_change = freq_res[4]
+        top_20_frequency_phenotypes_cluster = freq_res[5]
+        tf_idf_cluster = freq_res[6]
+
+        # Create an empty DataFrame to store the results
+        freq_df = pd.DataFrame(columns=['Phecode', 'Frequency in Cluster', 'Frequency in Entire Population', 'Frequency in Population without Cluster', 'Fold Change', 'Phenotype (new)', 'TF-IDF'])
+
+        # Filter the top phenotypes by fold change and iterate over each top phenotype
+        for phenotype in top_20_frequency_phenotypes_cluster.index:
+
+            # Extract frequencies in the cluster, entire population, and population without the cluster
+            frequency_cluster = phenotype_frequencies_cluster[phenotype]
+            frequency_population = phenotype_frequencies_population[phenotype]
+            frequency_population_without_cluster = phenotype_frequencies_population_without_cluster[phenotype]
+            fold_change = phenotype_fold_change[phenotype]
+            # phe_def = phe_codes_dictionary[phenotype]
+            phenotype_new = phe_codes_dict[phenotype]
+            tf_idf = tf_idf_cluster[phenotype]
+            # Append the results to the DataFrame
+            freq_df = freq_xl_append(freq_df, phenotype, frequency_cluster, frequency_population, frequency_population_without_cluster, fold_change, phenotype_new, tf_idf)
+
+        freq_df = freq_df[freq_df['Fold Change'] >= 1.2]
+        # freq_df = freq_df[freq_df['Frequency in Cluster'] >= 0.01]
+
+        # Save the results to a sheet in the Excel file for the current cluster
+        freq_df.to_excel(writer, sheet_name=f'Cluster {cluster}', index=False)
+        label_phenotypes_dict[cluster] = list(freq_df['Phecode'])
+
+    sizes = df.groupby(['cluster']).size()
+    sizes = sizes.sort_values(ascending=False)
+    sizes_df = pd.DataFrame({'cluster': sizes.index, 'size': sizes.values})
+    sizes_df.to_excel(writer, sheet_name='sizes', index=False)
+    # Save the Excel file
+    writer.close()
+    return label_phenotypes_dict
+
+def get_X(ASD_patient_PheCode_full_unstack):
+    X = pd.DataFrame()
+    X['RACE'] = ASD_patient_PheCode_full_unstack['RACE']
+    # X['age_group'] = ASD_patient_PheCode_full_unstack['age_group']
+    X['GENDER'] = ASD_patient_PheCode_full_unstack['GENDER']
+
+    # convert all columns to categorical data type
+    for col in X.columns:
+        X[col] = X[col].astype('category')
+
+    # set up the logistic regression model
+    X = pd.get_dummies(X, drop_first=True) # convert categorical variables to indicator variables
+    X = X.astype(int)
+    return X
+
+def perform_phewas(ASD_patient_PheCode_full_unstack, phewas_dir, phewas_name, label_phenotypes_dict):
+    # Create a new Excel file
+    X = get_X(ASD_patient_PheCode_full_unstack)
+    # X = pd.DataFrame([])
+    y = ASD_patient_PheCode_full_unstack['cluster']
+    y = np.array(y)
+
+    with pd.ExcelWriter(f'{phewas_dir}/{phewas_name}.xlsx') as writer:
+        for label, phenotypes in label_phenotypes_dict.items():
+            if label == '-1':
+                continue
+            labeled_y = np.where(y == label, 1, 0)
+            results = [] # store the results for this label
+            for phenotype in phenotypes:
+                X_reg = X.copy()
+                X_reg['Phenotype'] = ASD_patient_PheCode_full_unstack[phenotype]
+                # print('X_reg', X_reg)
+                # fit the logistic regression model
+                logreg = sm.Logit(labeled_y, X_reg).fit(method='bfgs', maxiter=1000)
+                # get the odds ratio, p-value, and confidence interval for the second column
+                coef = logreg.params[-1] # coefficient
+                odds_ratio = np.exp(coef) # odds ratio
+                pvalue = logreg.pvalues[-1] # p-value
+                conf_int_high = np.exp(logreg.conf_int()[1][-1]) # confidence interval
+                conf_int_low = np.exp(logreg.conf_int()[0][-1]) # confidence interval
+                # print('params[11]', logreg.params[11])
+                # print('params', logreg.params)
+                # print('pvalues', logreg.pvalues)
+
+                # store the results in a DataFrame
+                results.append({'Phecode': phenotype, 'odds_ratio': odds_ratio, 'pvalue': pvalue, 'conf_int_low': conf_int_low, 'conf_int_high': conf_int_high})
+
+            # create a new sheet for this label and write the results
+            if len(results) == 0:
+                df = pd.DataFrame(columns=['Phecode', 'odds_ratio', 'pvalue', 'conf_int_low', 'conf_int_high'])
+            else:
+                df = pd.DataFrame(results)
+            # df.set_index('Phecode', inplace=True)
+            sheet_name = f'Cluster {label}'
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+            # print the results for this label
+            print('='*30, f'Cluster {label}', '='*30)
+            print(df)
+
+def merge_files(phewas_dir, phewas_name, writer_path, writer_name, merge_name):
+    excel_file1 = pd.ExcelFile(f'{phewas_dir}/{phewas_name}.xlsx')
+    excel_file2 = pd.ExcelFile(f'{writer_path}/{writer_name}.xlsx')
+
+    sh = excel_file2.sheet_names
+    # sh = list(set(excel_file2.sheet_names) - set(['sizes']))
+
+    with pd.ExcelWriter(f'{phewas_dir}/{merge_name}.xlsx') as writer:
+        for i in range(len(excel_file1.sheet_names)):
+            print(f'sheet1={excel_file1.sheet_names[i]}, sheet2={sh[i]}')
+            df1 = excel_file1.parse(excel_file1.sheet_names[i])
+            df2 = excel_file2.parse(sh[i])
+
+            # Define the desired column order
+            column_order = ['Phecode','Frequency in Cluster', 'odds_ratio', 'pvalue', 'conf_int_low', 'conf_int_high', 'Frequency in Entire Population', 'Frequency in Population without Cluster', 'Fold Change', 'Phenotype (new)', 'TF-IDF']
+
+            # Merge the dataframes based on the key columns
+            if df1['Phecode'].empty or df2['Phecode'].empty:
+                merged_df = pd.DataFrame(columns=column_order)  # Creating an empty DataFrame when both 'Phecode' columns are empty
+            else:
+                merged_df = pd.merge(df1, df2, left_on='Phecode', right_on='Phecode')
+
+            # Rearrange the columns in merged_df according to the desired order
+            merged_df = merged_df[column_order]
+
+            # merged_df.drop(columns=['phenotype'], inplace=True)
+            # merged_df = merged_df[['Phecode'] + [col for col in merged_df.columns if col != 'Phecode']]
+
+            # Save the merged dataframe to a new sheet
+            merged_df.to_excel(writer, sheet_name=sh[i], index=False)
+
+
+def sizes_file_creation(df, phewas_dir, subdir_name):
+    # Group by 'cluster' and compute the aggregations
+    cluster_summary = df.groupby('cluster').agg(
+        total_patients=('PATIENT_SK', 'size'),
+        ASD_count=('ASD_ind', lambda x: (x == 1).sum()),
+        control_count=('ASD_ind', lambda x: (x == 0).sum())
+    ).reset_index()
+
+    # Calculate percentage of ASD and control counts
+    cluster_summary['ASD_percentage'] = (cluster_summary['ASD_count'] / cluster_summary['total_patients'])
+    cluster_summary['control_percentage'] = (cluster_summary['control_count'] / cluster_summary['total_patients'])
+
+    # Write to CSV
+    sizes_file_name = 'clusters_sizes_by_type'
+    if subdir_name:
+        sizes_file_name = f'{sizes_file_name}_{subdir_name}'
+    else:
+        sizes_file_name = f'{sizes_file_name}'
+    cluster_summary.to_csv(f'{phewas_dir}/{sizes_file_name}.csv', index=False)
+    print('sizes file was created')
+    return
+
+def perform_phewas_analysis(df_dict, writer_path, writer_name, phewas_dir="", phewas_name="", merge_name="", phe_codes_dict={}, subdir_name="", phewas_flag=False):
+    df = df_dict['patients'].copy()
+    sizes_file_creation(df, phewas_dir, subdir_name)
+    df.drop(['MARITAL_STATUS', 'ASD_ind'], inplace=True, axis=1)
+    # column_indices = list(range(1790)) + [-1]
+    # df = df.iloc[:, column_indices]
+    print('column df', df.columns)
+    rows_to_drop = len(df[df['cluster'].isna()])
+    print(f'{rows_to_drop} rows were dropped')
+    df = df[df['cluster'].isna()==False]
+    writer = create_writer(writer_path, writer_name)
+    label_phenotypes_dict = extract_xl(df, writer, phe_codes_dict)
+    if phewas_flag:
+        perform_phewas(df, phewas_dir, phewas_name, label_phenotypes_dict)
+        merge_files(phewas_dir, phewas_name, writer_path, writer_name, merge_name)
+
 
 def handle_patients(df_dict: dict, args):
     """
