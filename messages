@@ -1,0 +1,42 @@
+phewas analysis mixed message:
+
+-t
+phewas_analysis
+-f
+"/Users/hodaya/Projects/Python/Thesis/all_population/bootstrap_samples_communities_with_clusters_and_demographics/ASD_control_sample_1test01092023_after_union_louvain_communities_10nn_with_clusters_and_demographics.csv"
+-icd
+"/Users/hodaya/Projects/Python/Thesis/Data Preparation/Table_ICD9_ICD10.csv"
+-pt
+mixed
+-cv
+True
+
+
+community detection mixed message:
+-t
+community_detection
+-f
+"/Users/hodaya/Projects/Python/Thesis/all_population/ASD_control_samples/ASD_control_sample_1.csv"
+-icd
+"/Users/hodaya/Projects/Python/Thesis/Data Preparation/Table_ICD9_ICD10.csv"
+-pt
+mixed
+-ctt
+louvain
+-cv
+True
+
+community detection ASD message:
+
+-t
+community_detection
+-f
+"/Users/hodaya/Projects/Python/Thesis/Data Preparation/ASD_features_PheCodes_PheCodesFloor_RACE_GENDER_MARITAL_STATUS_labTest_IsDislip_unstack_up_to_10yo_20072022_to_Hodaya.csv"
+-icd
+"/Users/hodaya/Projects/Python/Thesis/Data Preparation/Table_ICD9_ICD10.csv"
+-pt
+ASD
+-ctt
+louvain
+-cv
+True

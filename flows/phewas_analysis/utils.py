@@ -407,7 +407,7 @@ def get_bonferroni_threshold(output_dir, phewas_name):
 def filter_df_by_pvalue(output_dir, dfs, bonferroni_alpha, BONFERRONI_FILE_NAME):
     filtered_dfs = {}
     i=0
-
+    asd_clusters = []
     with pd.ExcelWriter(f'{output_dir}/{BONFERRONI_FILE_NAME}.xlsx') as writer:
         for sheet, df in dfs.items():
             i+=1
@@ -418,12 +418,14 @@ def filter_df_by_pvalue(output_dir, dfs, bonferroni_alpha, BONFERRONI_FILE_NAME)
             # Write the filtered dataframe to a sheet in the new Excel file
             filtered_df.to_excel(writer, sheet_name=sheet, index=False)
 
+            if type_val == 'ASD':
+                asd_clusters.append(sheet)
             print(f"{sheet} type: {type_val}")
             print(f"{sheet}: num of clusters originally: {len(df)}, num of clusters after filter p-value: {len(filtered_dfs[sheet])}")
             # Print significant phecodes for each cluster
             print(f"{sheet} significant phecodes: {filtered_df['Phecode'].tolist()}")
             print('*'*50)
-
+    print('asd_clusters', asd_clusters)
 
 
 def handle_patients(df_dict: dict, args):
