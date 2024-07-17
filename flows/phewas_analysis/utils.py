@@ -15,6 +15,7 @@ import statsmodels.api as sm
 from ..community_detection.consts import DESIRED_RACE_UNIQUE, DESIRED_MARITAL_STATUS_UNIQUE, DESIRED_GENDER_UNIQUE
 from helpers.consts import *
 from helpers.exceptions import FieldMissingException, ValueMissingException
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 
 def measure_time(func):
@@ -181,7 +182,7 @@ def extract_xl(df, writer, phe_codes_dict):
     print('-' * NUM_OF_HYPHENS)
     print(f'Calculating frequencies and saving to Excel...')
     label_phenotypes_dict = {}  # create an empty dictionary to store the phenotype indexes for each label
-    for cluster in sorted(df['cluster'].unique())[:2]:
+    for cluster in sorted(df['cluster'].unique()):
         print(f'Cluster {cluster} started...')
         cluster_data = df[df['cluster'] == cluster]  # Filter data for the current cluster
 
@@ -248,6 +249,18 @@ def perform_phewas(ASD_patient_PheCode_full_unstack, phewas_dir, phewas_name, la
     y = ASD_patient_PheCode_full_unstack['cluster']
     y = np.array(y)
 
+    # Check for multicollinearity
+    def calculate_vif(X):
+        X_vif = sm.add_constant(X)
+        vif_data = pd.DataFrame()
+        vif_data["feature"] = X.columns
+        vif_data["VIF"] = [variance_inflation_factor(X_vif.values, i + 1) for i in range(X.shape[1])]
+        return vif_data
+
+    # Assuming X is a DataFrame of binary predictors
+    vif = calculate_vif(X)
+    print(vif)
+
     with pd.ExcelWriter(f'{phewas_dir}/{phewas_name}.xlsx') as writer:
         for label, phenotypes in label_phenotypes_dict.items():
             if label == '-1':
@@ -258,8 +271,16 @@ def perform_phewas(ASD_patient_PheCode_full_unstack, phewas_dir, phewas_name, la
                 X_reg = X.copy()
                 X_reg['Phenotype'] = ASD_patient_PheCode_full_unstack[phenotype]
                 # print('X_reg', X_reg)
+
+                # Adding a constant term for the intercept
+                X_reg = sm.add_constant(X_reg)
+
                 # fit the logistic regression model
                 logreg = sm.Logit(labeled_y, X_reg).fit(method='bfgs', maxiter=1000)
+                # Fit the logistic regression model with L2 regularization
+                # logreg = sm.Logit(labeled_y, X_reg).fit_regularized(method='l1',maxiter=1000)
+
+
                 # get the odds ratio, p-value, and confidence interval for the second column
                 coef = logreg.params[-1] # coefficient
                 odds_ratio = np.exp(coef) # odds ratio
@@ -316,6 +337,7 @@ def merge_files(phewas_dir, phewas_name, writer_path, writer_name, merge_name):
 
             # Save the merged dataframe to a new sheet
             merged_df.to_excel(writer, sheet_name=sh[i], index=False)
+    return merged_df
 
 
 def sizes_file_creation(df, phewas_dir, subdir_name):
@@ -354,7 +376,54 @@ def perform_phewas_analysis(df_dict, writer_path, writer_name, phewas_dir="", ph
     label_phenotypes_dict = extract_xl(df, writer, phe_codes_dict)
     if phewas_flag:
         perform_phewas(df, phewas_dir, phewas_name, label_phenotypes_dict)
-        merge_files(phewas_dir, phewas_name, writer_path, writer_name, merge_name)
+        phewas_df = merge_files(phewas_dir, phewas_name, writer_path, writer_name, merge_name)
+    return phewas_df
+
+
+def get_bonferroni_threshold(output_dir, phewas_name):
+    xls = pd.ExcelFile(f'{output_dir}/{phewas_name}.xlsx')
+
+    # get all sheet names
+    sheet_names = xls.sheet_names
+    print(f'num of sheets: {len(sheet_names)}')
+    alpha = 0.05  # Set the desired alpha level here
+
+    # Store significant phecodes for each cluster
+    significant_phecodes = {}
+    dfs={}
+    num_tests = 0
+    # Iterate over each sheet (i.e., cluster)
+    for sheet in sheet_names:
+        # Read the sheet into a DataFrame
+        df = pd.read_excel(xls, sheet_name=sheet)
+        dfs[sheet] = df
+        # Perform Bonferroni correction
+        num_tests = num_tests + len(df)
+    print('num_tests', num_tests)
+    bonferroni_alpha = alpha / num_tests
+    print('bonferroni_alpha', bonferroni_alpha)
+    return bonferroni_alpha, dfs
+
+def filter_df_by_pvalue(output_dir, dfs, bonferroni_alpha, BONFERRONI_FILE_NAME):
+    filtered_dfs = {}
+    i=0
+
+    with pd.ExcelWriter(f'{output_dir}/{BONFERRONI_FILE_NAME}.xlsx') as writer:
+        for sheet, df in dfs.items():
+            i+=1
+            filtered_df = df.loc[df['pvalue'] < bonferroni_alpha]
+            filtered_dfs[sheet] = filtered_df
+            type_val = 'ASD' if filtered_df['Phecode'].isin([313.3]).any() else 'Control'
+
+            # Write the filtered dataframe to a sheet in the new Excel file
+            filtered_df.to_excel(writer, sheet_name=sheet, index=False)
+
+            print(f"{sheet} type: {type_val}")
+            print(f"{sheet}: num of clusters originally: {len(df)}, num of clusters after filter p-value: {len(filtered_dfs[sheet])}")
+            # Print significant phecodes for each cluster
+            print(f"{sheet} significant phecodes: {filtered_df['Phecode'].tolist()}")
+            print('*'*50)
+
 
 
 def handle_patients(df_dict: dict, args):

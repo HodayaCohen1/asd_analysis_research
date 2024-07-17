@@ -6,7 +6,7 @@ from sklearn.model_selection import KFold
 
 from flows.AbstractFlow import AbstractFlow
 from ..phewas_analysis.consts import *
-from ..phewas_analysis.utils import make_output_dir, create_icd_dict, perform_phewas_analysis
+from ..phewas_analysis.utils import make_output_dir, create_icd_dict, perform_phewas_analysis, get_bonferroni_threshold, filter_df_by_pvalue
 
 class PhewasAnalysisFlow(AbstractFlow, ABC):
     def __init__(self, type: str):
@@ -37,10 +37,16 @@ class PhewasAnalysisFlow(AbstractFlow, ABC):
         # if args.population_type in ('Control', 'mixed'):
         #     add_dempgraphic_data(df_dict, args)
 
-
         # ---------------------- Handle icd dataframe ----------------------
         phe_codes_dict = create_icd_dict(df_dict)
-        perform_phewas_analysis(df_dict, output_dir, FREQ_FILE_NAME, output_dir, PHEWAS_FILE_NAME, FINAL_FILE_NAME, phe_codes_dict, phewas_flag=True)
+
+        # ---------------------- Perform Phewas Analysis ----------------------
+        phewas_df = perform_phewas_analysis(df_dict, output_dir, FREQ_FILE_NAME, output_dir, PHEWAS_FILE_NAME, FINAL_FILE_NAME, phe_codes_dict, phewas_flag=True)
+
+        # ---------------------- Filter p-value by using Bonferroni ----------------------
+        bonferroni_alpha, dfs = get_bonferroni_threshold(output_dir, FINAL_FILE_NAME)
+
+        filter_df_by_pvalue(output_dir, dfs, bonferroni_alpha, BONFERRONI_FILE_NAME)
 
 
 

@@ -8,3 +8,4 @@ DESIRED_GENDER_UNIQUE = ['Male', 'Female', 'Unknown']
 FREQ_FILE_NAME = 'final_freq_norm'
 PHEWAS_FILE_NAME = 'final_phewas_norm'
 FINAL_FILE_NAME = 'final_classes_definition_including_phewas_norm'
+BONFERRONI_FILE_NAME = 'final_classes_definition_including_phewas_norm_after_bonfernni_filter'
