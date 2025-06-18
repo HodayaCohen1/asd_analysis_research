@@ -19,9 +19,12 @@ def parse_args():
     parser.add_argument('--icd_file', '-icd', type=str, required=True, help='input icd file')
     parser.add_argument('--population_type', '-pt', type=str, required=True, help='population type - can be ASD/ Control/mixed')
     parser.add_argument('--community_detection_type', '-ctt', type=str, required=False, help='community detection type - can be louvain/label_propagation/infomap/greedy_modularity')
-    parser.add_argument('--cv_ind', '-cv', type=bool, required=True, help='cross validation indicator')
+    parser.add_argument('--cv_ind', '-cv', type=str, required=True, help='cross validation indicator')
 
     args = parser.parse_args()
+
+    args.cv_ind = args.cv_ind.lower() == 'true'
+
     return args
 
 

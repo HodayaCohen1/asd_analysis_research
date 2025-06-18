@@ -75,7 +75,7 @@ class CommunityDetectionFlow(AbstractFlow, ABC):
         else:
 
             # ---------------------- Data Preparation ----------------------
-            data_prep(df_dict, args)
+            data_prep(df_dict)
 
             # ---------------------- Get top 10 nearest neighbors ----------------------
             get_top10_nn(df_dict)

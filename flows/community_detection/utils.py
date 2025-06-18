@@ -141,6 +141,7 @@ def handle_patients(df_dict: dict, args):
     df_patients.drop_duplicates(inplace=True)
 
     if args.population_type == 'mixed':
+        # remove the ASD related indications
         for code in ['264.9', '292.1', '300.1', '312.0', '313.1', '315.0', '315.1', '315.2', '348.8', '350.3', '752.0', '313.3']:
             # drop the ASD indicator column
             df_patients.drop(code, axis=1, inplace=True)

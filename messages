@@ -24,7 +24,7 @@ mixed
 -ctt
 louvain
 -cv
-True
+False
 
 community detection ASD message:
 
@@ -40,3 +40,19 @@ ASD
 louvain
 -cv
 True
+
+
+community detection Control message:
+
+-t
+community_detection
+-f
+"/Users/hodaya/Projects/Python/Thesis/Data Preparation/control_sample.csv"
+-icd
+"/Users/hodaya/Projects/Python/Thesis/Data Preparation/Table_ICD9_ICD10.csv"
+-pt
+Control
+-ctt
+louvain
+-cv
+false
