@@ -272,14 +272,11 @@ def perform_phewas(ASD_patient_PheCode_full_unstack, phewas_dir, phewas_name, la
                 X_reg['Phenotype'] = ASD_patient_PheCode_full_unstack[phenotype]
                 # print('X_reg', X_reg)
 
-                # Adding a constant term for the intercept
-                X_reg = sm.add_constant(X_reg)
+                # # Adding a constant term for the intercept - for better odds ratio - it changes the results dramatically
+                # X_reg = sm.add_constant(X_reg)
 
                 # fit the logistic regression model
                 logreg = sm.Logit(labeled_y, X_reg).fit(method='bfgs', maxiter=1000)
-                # Fit the logistic regression model with L2 regularization
-                # logreg = sm.Logit(labeled_y, X_reg).fit_regularized(method='l1',maxiter=1000)
-
 
                 # get the odds ratio, p-value, and confidence interval for the second column
                 coef = logreg.params[-1] # coefficient
